@@ -17,7 +17,7 @@ Downloading 2017 Central Park weather data:
 
 ```{r}
 
-weather_df = 
+weather_df <- 
   rnoaa::meteo_pull_monitors(
     c("USW00094728"),
     var = c("PRCP", "TMIN", "TMAX"), 
@@ -34,5 +34,18 @@ weather_df =
 
 ## Problem 2
 
+```{r}
+
+homicide_df <- read_csv("data/homicide-data.csv")
+
+```
+
 
 ## Problem 3
+
+```{r}
+
+birth_df <- read_csv("data/birthweight.csv")
+
+```
+
