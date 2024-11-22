@@ -8,6 +8,7 @@ output: github_document
 
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
+library(dplyr)
 
 ```
 
@@ -34,9 +35,55 @@ weather_df <-
 
 ## Problem 2
 
+Reading in and cleaning the data:
+
 ```{r}
 
-homicide_df <- read_csv("data/homicide-data.csv")
+homicide_df <- read_csv("data/homicide-data.csv") %>% 
+  unite(city_state, city, state, sep = ", ") %>% 
+  mutate(victim_age = na_if(victim_age, "Unknown"), 
+         victim_age = as.numeric(victim_age),
+         resolved = as.numeric(disposition == "Closed by arrest")) %>% 
+  filter(!city_state %in% c("Dallas, TX", "Phoenix, AZ", "Kansas City, MO", "Tulsa, AL")) %>% 
+  filter(victim_race %in% c("White", "Black"))
+
+```
+
+GLM for Baltimore, MD: 
+
+```{r}
+
+baltimore_df <- homicide_df %>% filter(city_state == "Baltimore, MD")
+
+balt_glm <- baltimore_df %>% 
+  glm(resolved ~ victim_age + victim_sex + victim_race, data =., family = binomial()) 
+
+balt_glm %>%  
+  broom::tidy() %>% 
+  mutate(OR = exp(estimate)) |>
+  select(term, log_OR = estimate, OR, p.value, std.error)
+
+```
+
+Obtaining the confidence interval of the adjusted odds ratio comparing male victims to female victims:
+
+```{r}
+
+
+
+```
+
+
+Running glm for each of the cities:
+
+```{r}
+
+```
+
+
+Plotting the estimated ORs and CIs for each city:
+
+```{r}
 
 ```
 
