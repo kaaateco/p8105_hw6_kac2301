@@ -35,9 +35,74 @@ weather_df <-
 
 ```{r}
 
-boot_sample = function(df) {
+boot_sample <- function(df) {
   sample_frac(df, replace = TRUE)
 }
+
+boot_straps <-
+  tibble(strap_number = 1:5000) %>% 
+  mutate(
+    strap_sample = map(strap_number, \(i) boot_sample(df = weather_df))
+  )
+
+bootstrap_intercepts <-
+  boot_straps %>% 
+  mutate(
+    models = map(strap_sample, \(df) lm(tmax ~ tmin, data = df)),
+    results = map(models, broom::tidy)) %>%  
+  select(-strap_sample, -models) %>% 
+  unnest(results) %>% 
+  pivot_wider(
+    names_from = term,
+    values_from = c(estimate, std.error, statistic, p.value)) %>% 
+  janitor::clean_names() %>% 
+  select(strap_number, estimate_intercept, estimate_tmin) %>% 
+  mutate(log_betas = log(estimate_intercept * estimate_tmin))
+
+head(bootstrap_intercepts)
+
+bootstrap_rs <-
+  boot_straps %>% 
+  mutate(
+    models = map(strap_sample, \(df) lm(tmax ~ tmin, data = df)),
+    results = map(models, broom::glance)) %>%  
+  select(-strap_sample, -models) %>% 
+  unnest(results)
+
+head(bootstrap_rs)
+
+```
+
+Plotting distributions of r-squared and log(beta0*beta1)
+
+```{r}
+
+bootstrap_intercepts %>% ggplot(aes(x = log_betas)) + geom_histogram()
+
+bootstrap_rs %>% ggplot(aes(x = r.squared)) + geom_histogram()
+
+```
+
+Both of the plots above are normally distributed. 
+
+Calculating 95% confidence intervals of r-squared and log(beta0*beta1) 
+
+```{r}
+
+# For log(beta0*beta1)
+
+bootstrap_intercepts %>%  
+  summarize(
+    ci_lower = quantile(log_betas, 0.025), 
+    ci_upper = quantile(log_betas, 0.975))
+
+
+# For r-squared
+
+bootstrap_rs %>%  
+  summarize(
+    ci_lower = quantile(r.squared, 0.025), 
+    ci_upper = quantile(r.squared, 0.975))
 
 ```
 
