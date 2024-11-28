@@ -9,6 +9,7 @@ output: github_document
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(dplyr)
+library(modelr)
 
 ```
 
@@ -32,6 +33,14 @@ weather_df <-
 
 ```
 
+```{r}
+
+boot_sample = function(df) {
+  sample_frac(df, replace = TRUE)
+}
+
+```
+
 
 ## Problem 2
 
@@ -41,8 +50,9 @@ Reading in and cleaning the data:
 
 homicide_df <- read_csv("data/homicide-data.csv") %>% 
   unite(city_state, city, state, sep = ", ") %>% 
-  mutate(victim_age = na_if(victim_age, "Unknown"), 
+  mutate(victim_age = na_if(victim_age, "Unknown"),
          victim_age = as.numeric(victim_age),
+         victim_sex = na_if(victim_sex, "Unknown"),
          resolved = as.numeric(disposition == "Closed by arrest")) %>% 
   filter(!city_state %in% c("Dallas, TX", "Phoenix, AZ", "Kansas City, MO", "Tulsa, AL")) %>% 
   filter(victim_race %in% c("White", "Black"))
@@ -60,23 +70,36 @@ balt_glm <- baltimore_df %>%
 
 balt_glm %>%  
   broom::tidy() %>% 
-  mutate(OR = exp(estimate)) |>
-  select(term, log_OR = estimate, OR, p.value, std.error)
+  mutate(OR = exp(estimate)) %>% 
+  select(term, log_OR = estimate, OR, std.error, p.value) %>% 
+  mutate(OR_lower_ci = exp(log_OR - 1.96*std.error), 
+         OR_upper_ci = exp(log_OR + 1.96*std.error))
 
 ```
 
-Obtaining the confidence interval of the adjusted odds ratio comparing male victims to female victims:
+The estimate of the odds ratio for solving homicides comparing male victims to female victims is 0.426 [0.325, 0.558]. 
+
+Running glm for each of the cities, extracting estimates for victim_sexMale:
 
 ```{r}
 
+cities_list <- unique(homicide_df$city_state)
 
+results <- homicide_df %>% 
+  group_by(city_state) %>% 
+  nest() %>% 
+  mutate(model = map(data, ~ glm(resolved ~ victim_age + victim_sex + victim_race, 
+                                    data = ., family = binomial)), 
+         model_summary = map(model, ~broom::tidy(.))) %>%
+  unnest(model_summary) %>% 
+  mutate(OR = exp(estimate)) %>% 
+  select(term, log_OR = estimate, OR, std.error, p.value) %>% 
+  filter(term == "victim_sexMale") %>% 
+  mutate(OR_lower_ci = exp(log_OR - 1.96*std.error), 
+         OR_upper_ci = exp(log_OR + 1.96*std.error)) %>% 
+  select(!term)
 
-```
-
-
-Running glm for each of the cities:
-
-```{r}
+head(results)
 
 ```
 
@@ -85,14 +108,99 @@ Plotting the estimated ORs and CIs for each city:
 
 ```{r}
 
+results %>% ggplot(aes(x = fct_reorder(city_state, OR), y = OR)) + 
+  geom_point() + 
+  geom_errorbar(aes(ymin = OR_lower_ci, ymax = OR_upper_ci)) +
+  theme(axis.text.x = element_text(angle = 80, hjust = 1)) 
+
 ```
+
+The increase in OR estimates is relatively constant (after being sorted) until we reach the top 3 cities with the highest OR estimates (Fresno, Stockton*, and Albuquerque). These cities are also the ones with the largest confidence intervals, and taking a closer look at the results of the models, none of their OR estimates were statistically significant. For most cities, the predicted OR was not statistically significant. 
+
+The city with the lowest OR is New York, which indicates that compared to the rest of the cities, the victim being a woman most greatly increased the likelihood that their murder would be solved. For all cities, all of the statistically significant outcomes indicated an OR less than 1 (the victim being a woman increased the solving likelihood). 
+
+*The city I'm from in CA is halfway between Fresno and Stockton :)
 
 
 ## Problem 3
 
+Prepping the data for regression: 
+
 ```{r}
 
-birth_df <- read_csv("data/birthweight.csv")
+birth_df <- read_csv("data/birthweight.csv") %>% 
+  mutate(
+    frace = 
+        case_match(frace,
+            1 ~ "white",
+            2 ~ "black", 
+            3 ~ "asian", 
+            4 ~ "puerto rican", 
+            8 ~ "other"),
+    frace = fct_infreq(frace),
+    mrace = 
+        case_match(mrace,
+            1 ~ "white",
+            2 ~ "black", 
+            3 ~ "asian", 
+            4 ~ "puerto rican",
+            8 ~ "other"),
+    mrace = fct_infreq(mrace), 
+    babysex = 
+        case_match(babysex,
+            1 ~ "male",
+            2 ~ "female"
+        ),
+    babysex = fct_infreq(babysex))
 
 ```
 
+The model I'm proposing for birthweight uses the following predictors: family monthly income (fincome), father's race (frace), mother's race (mrace), and smoking status. I'm interested in understanding how socioeconomic factors may impact the birthweight of babies. Race, family income, and smoking status are likely strong determinants of factors like the mother's diet, stress levels, access to healthcare, and other factors that certainly impact the mother's overall health, and likely the birthweight of the baby.
+
+I chose not to include physiological characteristics of the parents or baby because I was not interested in determining the purely biological and genetic predictors of birthweight. 
+
+Looking at the residual plot below, the residuals are relatively evenly spread around 0, which is what we would want (homoscedasticity). 
+
+```{r}
+
+birth_fit <- lm(bwt ~ fincome + frace + mrace + smoken, birth_df)
+
+birth_df %>% 
+  modelr::add_predictions(birth_fit) %>% 
+  modelr::add_residuals(birth_fit) %>% 
+  ggplot(aes(x = pred, y = resid)) + 
+  geom_point()
+
+```
+
+Comparing model to two others:
+
+```{r}
+
+birth_fit2 <- lm(bwt ~ blength + gaweeks, birth_df)
+birth_fit3 <- lm(bwt ~ (bhead + blength + babysex)**2 + bhead*blength*babysex, birth_df)
+
+cv_df <- crossv_mc(birth_df, 100)
+
+cv_df %>%
+  mutate(
+    birth_fit = map(train, \(df) lm(bwt ~ fincome + frace + mrace + smoken, birth_df)),
+    birth_fit2 = map(train, \(df) lm(bwt ~ blength + gaweeks, birth_df)),
+    birth_fit3 = map(train, \(df) 
+                     lm(bwt ~ (bhead + blength + babysex)**2 + bhead*blength*babysex, birth_df))) %>%  
+  mutate(
+    err_fit = map2_dbl(birth_fit, test, \(mod, df) rmse(model = mod, data = df)),
+    err_fit2 = map2_dbl(birth_fit2, test, \(mod, df) rmse(model = mod, data = df)),
+    err_fit3 = map2_dbl(birth_fit3, test, \(mod, df) rmse(model = mod, data = df))) %>% 
+  select(starts_with("err")) %>% 
+  pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") %>%  
+  mutate(model = fct_inorder(model)) %>%  
+  ggplot(aes(x = model, y = rmse)) + geom_violin()
+
+```
+
+My model has much larger RMSEs overall compared to models 2 and 3. This makes sense, since both models include body length, which I would expect to be very correlated with birthweight (bwt ~ blength has R^2 = 0.55). 
